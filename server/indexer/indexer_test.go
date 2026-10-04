@@ -13,11 +13,13 @@ import (
 
 	"github.com/asciimoo/hister/config"
 	"github.com/asciimoo/hister/server/document"
+	"github.com/asciimoo/hister/server/indexer/searchschema"
 	servermetrics "github.com/asciimoo/hister/server/metrics"
 	"github.com/asciimoo/hister/server/testutil"
 	"github.com/asciimoo/hister/server/vectorstore"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/search/query"
 )
 
 func newTestIndexer(t *testing.T, cfg *config.Config) *Indexer {
@@ -1021,4 +1023,280 @@ func TestSearchReturnsKeywordResultsAfterQueryEmbeddingTimeout(t *testing.T) {
 	if !result.SemanticEnabled {
 		t.Fatal("search did not attempt semantic embedding")
 	}
+}
+
+func TestSearchPriorityRulesUseGoRegexpSemantics(t *testing.T) {
+	idx := newTestIndexer(t, testutil.Config(t))
+	defer idx.Close()
+
+	const ordinaryURL = "https://example.com/guide"
+	const priorityURL = "https://wiki.example.com/guide"
+	for _, d := range []*document.Document{
+		{URL: ordinaryURL, Title: "Granite guide", Text: "Granite and quartz", Added: 200, Processed: true},
+		{URL: priorityURL, Title: "Granite guide", Text: "Granite and quartz", Added: 100, Language: "en", Processed: true},
+	} {
+		if err := idx.Add(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		patterns []string
+		firstURL string
+	}{
+		{"full URL", []string{`https://wiki\.example\.com/.*`}, priorityURL},
+		{"substring", []string{`wiki\.example\.com`}, priorityURL},
+		{"prefix anchor", []string{`^https://wiki\.example\.com/`}, priorityURL},
+		{"suffix anchor", []string{`wiki\.example\.com/guide$`}, priorityURL},
+		{"word boundary", []string{`\bwiki\b`}, priorityURL},
+		{"lazy quantifier", []string{`wiki.*?guide`}, priorityURL},
+		{"empty alongside matching", []string{"", `\bwiki\b`}, priorityURL},
+		{"no matches", []string{`missing\.example$`}, ""},
+		{"empty", []string{""}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := &config.Rule{ReStrs: tc.patterns}
+			if err := rule.Compile(); err != nil {
+				t.Fatalf("valid rule rejected: %v", err)
+			}
+			for _, text := range []string{"*", "granite"} {
+				t.Run(text, func(t *testing.T) {
+					result, err := idx.Search(&Query{Text: text, PriorityPatterns: tc.patterns})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if result.Total != 2 || len(result.Documents) != 2 {
+						t.Fatalf("got %d total and %d documents, want both matches", result.Total, len(result.Documents))
+					}
+					if tc.firstURL != "" && result.Documents[0].URL != tc.firstURL {
+						t.Errorf("first URL = %q, want priority URL %q", result.Documents[0].URL, tc.firstURL)
+					}
+				})
+			}
+		})
+	}
+
+	first, err := idx.Search(&Query{Text: "granite", PriorityPatterns: []string{`\bwiki\b`}, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Documents) != 1 || first.Documents[0].URL != priorityURL || first.PageKey == "" {
+		t.Fatalf("first page = %+v, want priority document and continuation", first)
+	}
+	second, err := idx.Search(&Query{Text: "granite", PriorityPatterns: []string{`\bwiki\b`}, Limit: 1, PageKey: first.PageKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Documents) != 1 || second.Documents[0].URL != ordinaryURL {
+		t.Fatalf("second page = %+v, want ordinary document", second)
+	}
+}
+
+func TestSearchPriorityRulesRespectFiltersAndSort(t *testing.T) {
+	idx := newTestIndexer(t, testutil.Config(t))
+	defer idx.Close()
+
+	const ordinaryURL = "https://example.com/guide"
+	const priorityURL = "https://wiki.example.com/guide"
+	for _, d := range []*document.Document{
+		{URL: ordinaryURL, Text: "Granite", Added: 200, UserID: 1, Processed: true},
+		{URL: priorityURL, Text: "Granite", Added: 100, UserID: 0, Language: "en", Processed: true},
+		{URL: "https://wiki.example.com/private", Text: "Granite", Added: 300, UserID: 2, Processed: true},
+		{URL: "https://wiki.example.com/unrelated", Text: "Basalt", Added: 400, UserID: 1, Processed: true},
+	} {
+		if err := idx.Add(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		text, sort, firstURL string
+		total                uint64
+	}{
+		{"granite", "", priorityURL, 2},
+		{"granite", "date", ordinaryURL, 2},
+		{`granite -url:"https://wiki.example.com/guide"`, "", ordinaryURL, 1},
+	} {
+		t.Run(tc.text+"/"+tc.sort, func(t *testing.T) {
+			result, err := idx.Search(&Query{Text: tc.text, Sort: tc.sort, UserID: 1, PriorityPatterns: []string{`\bwiki\b`}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Total != tc.total || len(result.Documents) != int(tc.total) {
+				t.Fatalf("got %d total and %d documents, want %d", result.Total, len(result.Documents), tc.total)
+			}
+			if result.Documents[0].URL != tc.firstURL {
+				t.Errorf("first URL = %q, want %q", result.Documents[0].URL, tc.firstURL)
+			}
+		})
+	}
+}
+
+func TestSearchRejectsInvalidPriorityRegexp(t *testing.T) {
+	idx := newTestIndexer(t, testutil.Config(t))
+	defer idx.Close()
+	if _, err := idx.Search(&Query{Text: "*", PriorityPatterns: []string{"["}}); err == nil {
+		t.Fatal("invalid priority regexp did not return an error")
+	}
+}
+
+type failingSearchIndex struct {
+	bleveIndex
+	err error
+}
+
+func (i failingSearchIndex) SearchInContext(context.Context, *bleve.SearchRequest) (*bleve.SearchResult, error) {
+	return nil, i.err
+}
+
+func TestSearchReturnsIndexFailures(t *testing.T) {
+	for _, allFail := range []bool{false, true} {
+		name := "partial failure"
+		if allFail {
+			name = "all indexes fail"
+		}
+		t.Run(name, func(t *testing.T) {
+			idx := newTestIndexer(t, testutil.Config(t))
+			defer idx.Close()
+			for _, language := range []string{"", "en"} {
+				if err := idx.Add(&document.Document{
+					URL: "https://example.com/" + language, Text: "Granite", Language: language, Processed: true,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			failure := errors.New("test search failure")
+			for name, index := range idx.indexes() {
+				if allFail || name == indexNameForLanguage("en") {
+					idx.idx.Remove(index)
+					idx.idx.Add(failingSearchIndex{bleveIndex: index, err: failure})
+				}
+			}
+			result, err := idx.Search(&Query{Text: "*"})
+			if !errors.Is(err, failure) {
+				t.Fatalf("Search error = %v, want underlying index failure", err)
+			}
+			if !strings.Contains(err.Error(), indexNameForLanguage("en")) {
+				t.Errorf("Search error does not identify the failing index: %v", err)
+			}
+			if result != nil {
+				t.Errorf("failed search returned apparently successful results: %+v", result)
+			}
+		})
+	}
+}
+
+// BenchmarkPrioritySearch compares the old regexp query implementation with
+// scoring candidate URLs. Patterns use syntax supported by both engines and
+// match the same URLs, so failures are never mistaken for fast searches.
+func BenchmarkPrioritySearch(b *testing.B) {
+	for _, count := range []int{10_000, 40_000} {
+		b.Run(fmt.Sprintf("documents=%d", count), func(b *testing.B) {
+			idx := priorityBenchmarkIndexer(b, count)
+			for _, tc := range []struct {
+				name, text string
+				total      uint64
+			}{
+				{"selective", "text:needle", uint64((count-1)/101 + 1)},
+				{"common", "text:granite", uint64(count)},
+				{"all", "*", uint64(count)},
+			} {
+				b.Run(tc.name, func(b *testing.B) {
+					for _, ruleCount := range []int{0, 1, 10, 50} {
+						patterns := make([]string, ruleCount)
+						for n := range patterns {
+							patterns[n] = fmt.Sprintf(`https://site%03d\.example/.*`, n)
+						}
+						implementations := []string{"old", "new"}
+						if ruleCount == 0 {
+							implementations = []string{"none"}
+						}
+						for _, implementation := range implementations {
+							b.Run(fmt.Sprintf("rules=%d/%s", ruleCount, implementation), func(b *testing.B) {
+								b.ReportAllocs()
+								for b.Loop() {
+									base, err := (&Query{Text: tc.text}).create(tc.text)
+									if err != nil {
+										b.Fatal(err)
+									}
+									switch implementation {
+									case "old":
+										boosted := query.NewBooleanQuery([]query.Query{base}, nil, nil)
+										for _, pattern := range patterns {
+											rq := bleve.NewRegexpQuery(pattern)
+											rq.SetField("url")
+											rq.SetBoost(100)
+											boosted.AddShould(rq)
+										}
+										base = boosted
+									case "new":
+										base, err = boostPriorityURLs(base, patterns)
+										if err != nil {
+											b.Fatal(err)
+										}
+									}
+									req := bleve.NewSearchRequest(base)
+									req.Size = 100
+									req.Fields = allFields
+									req.SortBy(searchschema.Sort("").Fields)
+									req.Highlight = bleve.NewHighlight()
+									req.Highlight.Fields = []string{"text"}
+									result, err := idx.searchIndexes(req)
+									if err != nil {
+										b.Fatal(err)
+									}
+									if result.Total != tc.total {
+										b.Fatalf("got %d matches, want %d", result.Total, tc.total)
+									}
+								}
+							})
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func priorityBenchmarkIndexer(b *testing.B, count int) *Indexer {
+	b.Helper()
+	dir := b.TempDir()
+	idx, err := initializeIndexer(dir, true, false, "")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer idx.Close()
+	for shard, language := range []string{"", "en"} {
+		index := idx.getOrCreate(language)
+		batch := index.NewBatch()
+		for n := shard; n < count; n += 2 {
+			text := "Granite quartz mineral geology mountain stone crystal research guide laboratory notes"
+			if n%101 == 0 {
+				text += " needle"
+			}
+			doc := &document.Document{
+				URL:      fmt.Sprintf("https://site%03d.example/articles/%08d", n%100, n),
+				Domain:   fmt.Sprintf("site%03d.example", n%100),
+				Title:    "Geology reference",
+				Text:     text,
+				Added:    int64(1_700_000_000 + n),
+				Updated:  int64(1_700_000_000 + n),
+				Language: language,
+			}
+			if err := batch.Index(doc.ID(), doc); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := index.Batch(batch); err != nil {
+			b.Fatal(err)
+		}
+	}
+	idx.Close()
+	// Reopen persisted indexes so background writes do not skew query timings.
+	idx, err = initializeIndexer(dir, true, false, "")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(idx.Close)
+	return idx
 }

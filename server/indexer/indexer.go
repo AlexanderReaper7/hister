@@ -83,6 +83,7 @@ const (
 	langIndexerName         = "index_%s.db"
 	updatedBackfillKey      = "hister.updated_backfill_complete"
 	updatedBackfillSize     = 200
+	priorityScoreBoost      = 100
 	bleveAsyncErrorCallback = "hister_background_error"
 	bleveErrorRetryDelay    = time.Second
 )
@@ -307,7 +308,23 @@ type indexingMetric struct {
 func (i *Indexer) searchIndexes(req *bleve.SearchRequest) (*bleve.SearchResult, error) {
 	i.indexesMu.RLock()
 	defer i.indexesMu.RUnlock()
-	return i.idx.Search(req)
+	res, err := i.idx.Search(req)
+	if err != nil {
+		return nil, err
+	}
+	// An alias can return a nil error even when some or all indexes failed.
+	// Do not present partial results as a successful search or an empty index.
+	if res.Status != nil && (res.Status.Failed > 0 || len(res.Status.Errors) > 0) {
+		failures := make([]error, 0, len(res.Status.Errors))
+		for _, name := range slices.Sorted(maps.Keys(res.Status.Errors)) {
+			failures = append(failures, fmt.Errorf("search index %q: %w", name, res.Status.Errors[name]))
+		}
+		if len(failures) == 0 {
+			return nil, fmt.Errorf("search failed for %d indexes", res.Status.Failed)
+		}
+		return nil, errors.Join(failures...)
+	}
+	return res, nil
 }
 
 func (i *Indexer) indexes() map[string]bleve.Index {
@@ -2269,20 +2286,48 @@ func (q *Query) create(text string) (query.Query, error) {
 	}
 
 	if !q.MatchAll && len(q.PriorityPatterns) > 0 {
-		bq := query.NewBooleanQuery([]query.Query{sq}, nil, nil)
-		for _, p := range q.PriorityPatterns {
-			if p == "" {
-				continue
-			}
-			rq := bleve.NewRegexpQuery(p)
-			rq.SetField("url")
-			rq.SetBoost(100)
-			bq.AddShould(rq)
-		}
-		return bq, nil
+		return boostPriorityURLs(sq, q.PriorityPatterns)
 	}
 
 	return sq, nil
+}
+
+// boostPriorityURLs scores only candidates from the original query, preserving
+// its text and ownership filters. Go regexps keep matching consistent with rule
+// validation and avoid Bleve's more restrictive regexp syntax.
+func boostPriorityURLs(base query.Query, patterns []string) (query.Query, error) {
+	matchers := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		if pattern == "" {
+			continue
+		}
+		matcher, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid priority rule %q: %w", pattern, err)
+		}
+		matchers = append(matchers, matcher)
+	}
+	if len(matchers) == 0 {
+		return base, nil
+	}
+
+	return query.NewCustomScoreQueryWithScorer(base,
+		func(ctx context.Context, match *search.DocumentMatch) (float64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			score := match.Score
+			if url, ok := match.Fields["url"].(string); ok {
+				for _, matcher := range matchers {
+					if matcher.MatchString(url) {
+						score += priorityScoreBoost
+					}
+				}
+			}
+			return score, nil
+		},
+		[]string{"url"}, nil,
+	), nil
 }
 
 func (q *Query) legacyDateFilterQuery() (query.Query, bool) {
