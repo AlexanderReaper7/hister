@@ -18,7 +18,7 @@ app:
 
 > **Note**: When `user_handling` is active, `access_token` is used only to authenticate users by comparing it to the user's access token. This can be useful when the Hister admin sets `app.access_token` in the configuration file to their personal access token in order to execute command-line Hister commands as the admin user.
 
-After enabling user handling, restart the server and create at least one user account before attempting to log in.
+After enabling user handling, restart the server. For password login, create at least one user account before attempting to log in. OAuth and proxy authentication can create accounts automatically. Setting `server.proxy_auth_header` also enables user handling automatically.
 
 ## Authentication
 
@@ -49,6 +49,16 @@ This is useful when you want to enforce a single sign-on policy and prevent user
 Personal access tokens continue to work when `oauth_only` is enabled, so API clients and CLI tools can authenticate without a browser login. In multiple user mode, `app.access_token` is a client default and must contain a user's personal token to authenticate.
 
 See the [OAuth-Only Mode section of the configuration docs](/docs/configuration#oauth-only-mode) for the full configuration reference.
+
+### Reverse Proxy Authentication
+
+Hister can use a username supplied by a trusted authentication proxy through `server.proxy_auth_header`, such as `Remote-User`. This automatically enables user handling. Existing usernames reuse their accounts and permissions; new usernames receive accounts without a password or administrator privileges.
+
+> **Security warning: Never enable `server.proxy_auth_header` without an authentication proxy in front of Hister.** The proxy must authenticate requests, discard client supplied identity headers, and set the configured header from the verified identity. Block direct access to Hister from untrusted clients. Otherwise, anyone who can supply the header can impersonate users, including administrators. A proxy that only provides HTTPS is insufficient.
+
+Personal access tokens and existing sessions still work when the proxy header is absent. Hister's **Logout** action does not end the proxy session; sign out through the authentication proxy to stop automatic authentication.
+
+See [Reverse Proxy Authentication](/docs/configuration#reverse-proxy-authentication) for configuration, account matching, and deployment requirements.
 
 ### Browser Extension
 

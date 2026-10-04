@@ -83,6 +83,8 @@ This is not something you want circulating unencrypted on the public Internet; t
 Hister's server does not support HTTPS itself, which is solved by using a [reverse proxy].
 In particular, some, like [Caddy] or [Traefik], have built-in support for automatically requesting the required [TLS certificate].
 
+> **Security warning:** The HTTPS proxy examples below do not authenticate users. Leave `server.proxy_auth_header` disabled unless you also configure a trusted authentication proxy to verify users and replace client supplied identity headers, and prevent untrusted clients from reaching Hister directly. Otherwise, clients can impersonate any Hister user, including administrators. See [Reverse Proxy Authentication](/docs/configuration#reverse-proxy-authentication) before enabling this feature.
+
 1. Fill in the [`server` configuration] with your domain name and a loopback listen address:
    ```yaml
    server:

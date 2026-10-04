@@ -163,6 +163,12 @@ description: 'Explore every configuration section, option, default value, enviro
       description: 'Exposes Prometheus metrics at /metrics under the configured base URL. Uses token authentication when configured and requires an administrator in multiple user mode. See Monitoring for setup and metric definitions.',
     },
     {
+      name: 'proxy_auth_header',
+      type: 'string',
+      defaultValue: '(empty, disabled)',
+      description: 'Authenticates users by a header set by a trusted authentication proxy and automatically enables user handling. Unsafe without an authentication proxy and protection against direct access. See Reverse Proxy Authentication below.',
+    },
+    {
       name: 'oauth',
       type: 'map',
       defaultValue: '(none)',
@@ -945,6 +951,36 @@ curl -H "X-Access-Token: your-secret-token-here" http://localhost:4433/api/confi
 ```
 
 **Security note**: API clients transmit the access token in plain text with each request, and the web UI transmits it during login. When exposing Hister over the network, always use HTTPS through a reverse proxy to encrypt credentials and sessions in transit. The token provides basic access control but does not replace proper authentication systems for multiple user scenarios.
+
+## Reverse Proxy Authentication
+
+> **Security warning: Do not enable `server.proxy_auth_header` without a trusted authentication proxy in front of Hister.** Hister trusts the configured header as proof of identity and does not verify that the sender is your proxy. Anyone who can supply that header can impersonate an existing user, including an administrator, or create a new account. HTTPS or a reverse proxy that only forwards traffic does not make this safe.
+
+Before enabling this feature, configure your proxy to authenticate requests, discard any client supplied value of the configured header, and set it from the verified user's identity. Prevent untrusted clients from reaching Hister directly and bypassing the proxy. Use a loopback listener when the proxy runs on the same host, a Unix socket with restricted permissions, or network rules that restrict backend access to the trusted proxy. Do not expose Hister's backend port publicly, including through container port publishing.
+
+Once these protections are in place, set the header name in your Hister configuration. This example assumes the authentication proxy runs on the same host and sets `Remote-User`:
+
+```yaml
+server:
+  address: 127.0.0.1:4433
+  base_url: https://hister.example.com
+  proxy_auth_header: 'Remote-User'
+```
+
+The equivalent environment variable is `HISTER__SERVER__PROXY_AUTH_HEADER=Remote-User`. Use the header name configured in your proxy, such as `Remote-User` or `X-Forwarded-User`. Leaving the setting empty disables proxy authentication.
+
+When enabled:
+
+- Hister automatically enables `app.user_handling`.
+- The header value, with surrounding whitespace removed, identifies the Hister username. An existing account keeps its documents, rules, token, and permissions, including administrator privileges. Use unique identities controlled by the authentication service; users must not be able to choose another Hister user's name.
+- A username without an existing account is automatically created on its first request. New accounts have no administrator privileges and no password, so password login is unavailable unless an administrator assigns one.
+- A successfully authenticated proxy identity takes precedence over session cookies and API tokens. Missing or empty headers fall back to normal session and personal access token authentication. Enabling this option does not disable existing password or OAuth login.
+
+CLI, browser extension, and MCP clients can still use a personal access token through `X-Access-Token` or `Authorization: Bearer TOKEN` when the proxy header is absent. They must also satisfy your proxy's access policy. Do not expose the backend to bypass that policy. In multiple user mode, a token must belong to a Hister user; a standalone `app.access_token` does not grant access.
+
+Hister's **Logout** action only clears its own session. It does not sign you out of the authentication proxy, so subsequent requests carrying the identity header remain authenticated. Sign out through your authentication proxy to end that access.
+
+See [User Handling](/docs/user-handling) for account management and document ownership, and [Server Setup](/docs/server-setup) for listener and reverse proxy configuration.
 
 ## OAuth
 
