@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -229,6 +230,50 @@ func TestSearchURLRegexpUsesGoMatchSemantics(t *testing.T) {
 		}
 		if len(result.Documents) != 1 || result.Documents[0].URL != test.want {
 			t.Fatalf("Search(%q) returned %#v, want %q", test.query, result.Documents, test.want)
+		}
+	}
+}
+
+func TestSearchOnlyNegatedTerms(t *testing.T) {
+	idx := newTestIndexer(t, testutil.Config(t))
+	defer idx.Close()
+
+	documents := []*document.Document{
+		{URL: "https://go.dev/doc", Title: "Golang docs", Text: "golang language", Processed: true},
+		{URL: "https://rust-lang.org/", Title: "Rust", Text: "rust language", Processed: true},
+		{URL: "https://python.org/", Title: "Python", Text: "python language", Processed: true},
+	}
+	for _, d := range documents {
+		if err := idx.Add(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		query string
+		want  []string
+	}{
+		// a negated field filter already returned every other document
+		{query: "-title:golang", want: []string{documents[1].URL, documents[2].URL}},
+		{query: "-golang", want: []string{documents[1].URL, documents[2].URL}},
+		{query: `-"golang language"`, want: []string{documents[1].URL, documents[2].URL}},
+		{query: "-golang -python", want: []string{documents[1].URL}},
+		{query: "language -golang", want: []string{documents[1].URL, documents[2].URL}},
+	}
+	for _, test := range tests {
+		result, err := idx.Search(&Query{Text: test.query})
+		if err != nil {
+			t.Fatalf("Search(%q): %v", test.query, err)
+		}
+		got := make([]string, 0, len(result.Documents))
+		for _, d := range result.Documents {
+			got = append(got, d.URL)
+		}
+		slices.Sort(got)
+		want := slices.Clone(test.want)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("Search(%q) returned %q, want %q", test.query, got, want)
 		}
 	}
 }
