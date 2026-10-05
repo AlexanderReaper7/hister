@@ -274,6 +274,11 @@ func Test_build_negated_word(t *testing.T) {
 	if bq.Must != nil {
 		t.Fatalf("negated-only word: expected Must to be nil, got %T", bq.Must)
 	}
+	// The base URL boost is for a positive term only; without a Must clause
+	// it would be the only required clause.
+	if bq.Should != nil {
+		t.Fatalf("negated-only word: expected Should to be nil, got %T", bq.Should)
+	}
 	nots := mustNotClauses(t, bq)
 	if len(nots) != 1 {
 		t.Fatalf("expected 1 must_not clause, got %d", len(nots))
