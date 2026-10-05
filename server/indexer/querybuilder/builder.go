@@ -523,6 +523,14 @@ func getTokenQuery(t Token, now time.Time) (query.Query, bool) {
 			v = v[1:]
 		}
 		field, value, hasField := fieldFilterValue(v)
+		if hasField {
+			switch field.Kind {
+			case searchschema.FieldKindSite:
+				return buildSiteQuery(field, value), negated
+			case searchschema.FieldKindExists:
+				return buildPresenceQuery(value), negated
+			}
+		}
 		if hasField && (field.Kind == searchschema.FieldKindText || field.Kind == searchschema.FieldKindKeyword || field.Kind == searchschema.FieldKindRegexp) {
 			v := value
 			if field.Kind == searchschema.FieldKindRegexp {
@@ -560,6 +568,10 @@ func getTokenQuery(t Token, now time.Time) (query.Query, bool) {
 				}
 			}
 			switch field.Kind {
+			case searchschema.FieldKindSite:
+				return buildSiteQuery(field, v), negated
+			case searchschema.FieldKindExists:
+				return buildPresenceQuery(v), negated
 			case searchschema.FieldKindRegexp:
 				return buildURLRegexpQuery(field, v), negated
 			case searchschema.FieldKindEnum:

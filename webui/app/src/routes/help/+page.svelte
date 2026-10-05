@@ -51,6 +51,10 @@
 
   const fieldExamples: QueryExample[] = [
     { query: 'domain:github.com', description: 'Limit results to a domain.' },
+    {
+      query: 'site:example.com',
+      description: 'Include a domain and its subdomains, ignoring letter case.',
+    },
     { query: 'title:"getting started"', description: 'Match a phrase in document titles.' },
     { query: 'text:encryption', description: 'Search only document content.' },
     { query: 'url:*/docs/*', description: 'Match a pattern in page addresses.' },
@@ -60,6 +64,11 @@
     },
     { query: 'language:en', description: 'Filter by detected language.' },
     { query: 'label:research', description: 'Find documents with a matching label.' },
+    { query: 'has:label', description: 'Find documents with a nonempty label.' },
+    {
+      query: '-has:metadata.author',
+      description: 'Find documents without an author metadata value.',
+    },
     {
       query: 'visits:5..9',
       description: 'Match visit counts from 5 through 9. Use visits:10.. for 10 or more.',
@@ -249,6 +258,13 @@
         or with other filters.
       </p>
       {@render queryExamples(fieldExamples, true)}
+      <p class="text-text-brand-secondary mt-4 text-sm leading-relaxed">
+        <code>site:example.com</code> includes <code>docs.example.com</code> but excludes
+        <code>notexample.com</code>. Use a hostname without a scheme, port, path, or wildcard.
+        <code>has:</code> accepts document fields and <code>metadata.KEY</code> paths. Missing, null,
+        empty, or whitespace only values count as absent; zero and false count as present. Arrays and
+        nested metadata objects need at least one nonempty value.
+      </p>
       <div class="mt-5 grid gap-5 md:grid-cols-2 md:gap-8">
         <div class="reference-note">
           <h3 class="font-outfit text-lg font-bold">Document types and exclusions</h3>

@@ -9,6 +9,7 @@ package searchschema
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/asciimoo/hister/server/document"
@@ -26,6 +27,8 @@ const (
 	FieldKindTime         FieldKind = "time"
 	FieldKindInteger      FieldKind = "integer"
 	FieldKindRegexp       FieldKind = "regexp"
+	FieldKindSite         FieldKind = "site"
+	FieldKindExists       FieldKind = "exists"
 )
 
 type FacetKind string
@@ -134,10 +137,16 @@ var valueSets = map[string][]ValueDefinition{
 		{Value: "10..", Label: "10 or more", Min: new(float64(10))},
 	},
 	"time_ranges": timeValues,
+	"presence_fields": {
+		{Value: "metadata.author", Label: "Metadata author"},
+		{Value: "metadata.source", Label: "Metadata source"},
+	},
 }
 
 var fields = []FieldDefinition{
 	{Name: "domain", Label: "Domain", Description: "Limit results to one domain", Kind: FieldKindKeyword, IndexField: "domain", Weight: 8, Visible: true, DefaultWildcard: true},
+	{Name: "site", Label: "Site", Description: "Match a domain and its subdomains", Kind: FieldKindSite, IndexField: "domain", Visible: true},
+	{Name: "has", Label: "Has value", Description: "Find documents with a nonempty field or metadata value", Kind: FieldKindExists, ValueSet: "presence_fields", Visible: true},
 	{Name: "title", Label: "Title", Description: "Search only page titles", Kind: FieldKindText, IndexField: "title", Weight: 12, Visible: true, Phrase: true, DefaultSearch: true},
 	{Name: "url", Label: "URL", Description: "Search only page addresses", Kind: FieldKindKeyword, IndexField: "url", Weight: 4, Visible: true, NormalizeFilePath: true, DefaultWildcard: true},
 	{Name: "url_re", Label: "URL regexp", Description: "Search page addresses with a Go regular expression", Kind: FieldKindRegexp, IndexField: "url", Weight: 4, Visible: true},
@@ -188,6 +197,24 @@ func Field(name string) (FieldDefinition, bool) {
 	return FieldDefinition{}, false
 }
 
+// PresenceField resolves fields accepted by has: without exposing arbitrary
+// internal storage fields. Metadata paths may name a leaf or a nested object.
+func PresenceField(name string) (string, bool) {
+	if key, ok := strings.CutPrefix(name, "metadata."); ok && key != "" {
+		return name, true
+	}
+	field, ok := Field(name)
+	if !ok {
+		return "", false
+	}
+	switch field.Kind {
+	case FieldKindText, FieldKindKeyword, FieldKindEnum, FieldKindNumericRange, FieldKindTime, FieldKindInteger:
+		return field.IndexField, true
+	default:
+		return "", false
+	}
+}
+
 func Facets() []FacetDefinition {
 	return slices.Clone(facets)
 }
@@ -202,6 +229,15 @@ func Facet(name string) (FacetDefinition, bool) {
 }
 
 func Values(name string) []ValueDefinition {
+	if name == "presence_fields" {
+		values := make([]ValueDefinition, 0, len(fields))
+		for _, field := range fields {
+			if _, ok := PresenceField(field.Name); ok && field.Visible {
+				values = append(values, ValueDefinition{Value: field.Name, Label: field.Label})
+			}
+		}
+		return append(values, valueSets[name]...)
+	}
 	return slices.Clone(valueSets[name])
 }
 
@@ -296,8 +332,8 @@ func CapabilitiesDefinition() Capabilities {
 		}
 	}
 	publicValues := make(map[string][]ValueDefinition, len(valueSets))
-	for name, values := range valueSets {
-		publicValues[name] = slices.Clone(values)
+	for name := range valueSets {
+		publicValues[name] = Values(name)
 	}
 	publicSort := sortCapabilities
 	publicSort.Options = slices.Clone(sortCapabilities.Options)

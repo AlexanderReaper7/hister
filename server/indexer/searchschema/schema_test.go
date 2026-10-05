@@ -17,7 +17,7 @@ func TestDefinitionsAreInternallyConsistent(t *testing.T) {
 			t.Fatalf("duplicate field %q", field.Name)
 		}
 		seenFields[field.Name] = true
-		if field.IndexField == "" {
+		if field.IndexField == "" && field.Kind != FieldKindExists {
 			t.Fatalf("field %q has no index field", field.Name)
 		}
 		if field.ValueSet != "" && len(Values(field.ValueSet)) == 0 {
@@ -127,6 +127,35 @@ func TestDocumentTypeValues(t *testing.T) {
 	for _, value := range Values("document_types") {
 		if value.Value == "file" {
 			t.Fatal("aggregate file filter must not appear as an overlapping facet bucket")
+		}
+	}
+}
+
+func TestConvenienceFilterCapabilities(t *testing.T) {
+	capabilities := CapabilitiesDefinition()
+	visible := make(map[string]FieldDefinition)
+	for _, field := range capabilities.Fields {
+		visible[field.Name] = field
+	}
+	if site, ok := visible["site"]; !ok || site.Description == "" {
+		t.Error("site filter is missing from search capabilities")
+	}
+	has, ok := visible["has"]
+	if !ok {
+		t.Fatal("has filter is missing from search capabilities")
+	}
+	values := make(map[string]bool)
+	for _, value := range capabilities.ValueSets[has.ValueSet] {
+		values[value.Value] = true
+	}
+	for _, value := range []string{"label", "title", "visits", "metadata.author"} {
+		if !values[value] {
+			t.Errorf("has filter does not suggest %q", value)
+		}
+	}
+	for _, value := range []string{"has", "site", "url_re", "user_id"} {
+		if values[value] {
+			t.Errorf("has filter suggests nonpublic or virtual field %q", value)
 		}
 	}
 }

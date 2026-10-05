@@ -46,6 +46,8 @@ You can search within specific fields using the `field:value` syntax:
 - **url:** - Search in URLs only (bare file paths without `://` are automatically resolved to absolute `file://` URLs)
 - **url_re:** Search URLs with a Go regular expression
 - **domain:** - Search in domain names only
+- **site:** Match a domain and its subdomains, ignoring letter case
+- **has:** Find documents with a nonempty field or metadata value, such as `has:label` or `has:metadata.author`
 - **label:** - Search in document labels only
 - **language:** - Filter by detected language (e.g., `en`, `de`, `fr`. Use `unknown` for languages Hister doesn't support)
 - **metadata.KEY:** - Match an exact metadata value, such as `metadata.source:linkding`
@@ -68,6 +70,38 @@ domain:github.com
 ```
 
 Finds all pages from github.com.
+
+```textplain
+site:example.com
+```
+
+Finds documents from example.com and any of its subdomains, such as docs.example.com.
+It does not match notexample.com or example.com.evil.test. Use a hostname without a scheme,
+port, path, or wildcard. Letter case and a final dot are ignored. `domain:example.com`
+continues to match only that exact domain.
+
+```textplain
+has:label
+-has:metadata.author
+```
+
+The first query finds documents with an assigned label. The second finds documents without
+an author metadata value. `has:` accepts `title`, `text`, `url`, `domain`, `label`, `language`,
+`type`, `visits`, `added`, `updated`, `user_id`, and any `metadata.KEY` path.
+
+Missing values, null, empty strings, whitespace only strings, and empty collections count as
+absent. Numeric zero and boolean false count as present. Arrays and nested metadata objects
+count as present when they contain at least one nonempty stored value. For example,
+`has:metadata.author.name` checks a nested author name. Field names and metadata keys are
+case sensitive. Unsupported field names match no documents.
+
+Both filters support negation and alternatives:
+
+```textplain
+-site:example.com
+site:(example.com|example.org) has:label
+has:(label|metadata.author)
+```
 
 ```textplain
 url:*/security/*
