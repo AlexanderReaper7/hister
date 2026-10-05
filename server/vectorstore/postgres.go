@@ -113,7 +113,12 @@ func (p *pgVectorStore) Delete(docID string) error {
 	return nil
 }
 
-func (p *pgVectorStore) Search(vector []float32, topK int, threshold float64, userID uint) (_ []Result, err error) {
+// Search does not implement allowed: nothing in this fork runs on Postgres,
+// so a filtered search fails loudly rather than returning unfiltered hits.
+func (p *pgVectorStore) Search(vector []float32, topK int, threshold float64, userID uint, allowed []string) (_ []Result, err error) {
+	if allowed != nil {
+		return nil, ErrFilterUnsupported
+	}
 	candidateLimit := searchCandidateLimit(topK)
 	userResults, err := p.searchUser(vector, candidateLimit, threshold, userID)
 	if err != nil || userID == 0 {

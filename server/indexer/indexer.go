@@ -1317,10 +1317,15 @@ func (i *Indexer) prepareDocumentWrite(ctx context.Context, d *document.Document
 	return &plan, nil
 }
 
+// applySubmissionTimestamps keeps added as the earliest time any submission
+// reported, so a history import can move a captured page's added back to its
+// first visit. updated is what the submission sent, else now.
 func applySubmissionTimestamps(d *document.Document, state storedDocumentState) {
 	now := time.Now().Unix()
 	if state.found && state.added != 0 {
-		d.Added = state.added
+		if d.Added == 0 || state.added < d.Added {
+			d.Added = state.added
+		}
 	} else if d.Added == 0 {
 		d.Added = now
 	}
@@ -1988,10 +1993,14 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 	}
 
 	// Run semantic search if enabled and the embedding infrastructure is available.
-	semanticText := querybuilder.RemoveStandaloneWildcards(expression.Text)
+	semanticText, semanticFilters := querybuilder.SplitSemantic(expression.Text)
 	if q.SemanticEnabled && i.embedder != nil && i.vectorStore != nil &&
 		strings.TrimSpace(semanticText) != "" {
 		r.SemanticEnabled = true
+		allowed, err := i.semanticAllowedDocuments(q, semanticFilters)
+		if err != nil {
+			return nil, err
+		}
 		vec, err := i.embedder.EmbedQuery(context.Background(), semanticText)
 		if err != nil {
 			log.Warn().Err(err).Msg("semantic query embedding failed")
@@ -2001,7 +2010,7 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 				threshold = semanticConfig.SimilarityThreshold
 			}
 			resultLimit := semanticConfig.ResultLimit
-			vsResults, err := i.vectorStore.Search(vec, resultLimit, threshold, q.UserID)
+			vsResults, err := i.vectorStore.Search(vec, resultLimit, threshold, q.UserID, allowed)
 			if err != nil {
 				log.Warn().Err(err).Msg("vector store search failed")
 			} else {
@@ -2065,6 +2074,53 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 	r.Total = max(r.Total, uint64(len(r.Documents))+semanticOnlyCnt)
 
 	return r, nil
+}
+
+// semanticAllowedDocuments returns the IDs of the documents a semantic search
+// may return: those matching the query's filters, its date range and its
+// owner, the same restrictions the keyword search applies. nil means every
+// document, which is also what a filter matching every document returns, so
+// the vector store skips the restriction.
+func (i *Indexer) semanticAllowedDocuments(q *Query, filters string) ([]string, error) {
+	if strings.TrimSpace(filters) == "" && q.DateFrom == 0 && q.DateTo == 0 && q.UserID == 0 {
+		return nil, nil
+	}
+	var fq query.Query = query.NewMatchAllQuery()
+	if strings.TrimSpace(filters) != "" {
+		var err error
+		if fq, err = querybuilder.BuildValidated(filters); err != nil {
+			return nil, err
+		}
+	}
+	if dateQuery, ok := q.legacyDateFilterQuery(); ok {
+		fq = bleve.NewConjunctionQuery(fq, dateQuery)
+	}
+	if q.UserID > 0 {
+		fq = bleve.NewConjunctionQuery(fq, userDocumentsQuery(q.UserID))
+	}
+
+	i.indexesMu.RLock()
+	total, err := i.idx.DocCount()
+	i.indexesMu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	req := bleve.NewSearchRequest(fq)
+	req.Size = int(total)
+	req.Fields = nil
+	req.SortBy([]string{"_id"})
+	res, err := i.searchIndexes(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.Total >= total {
+		return nil, nil
+	}
+	ids := make([]string, len(res.Hits))
+	for j, hit := range res.Hits {
+		ids[j] = hit.ID
+	}
+	return ids, nil
 }
 
 // GetByURLAndUser returns the document at u owned by uid. The url field is

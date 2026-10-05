@@ -1,6 +1,7 @@
 package querybuilder
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/asciimoo/hister/server/indexer/searchschema"
@@ -60,4 +61,36 @@ func sortDirective(token Token) (string, bool) {
 		return "", true
 	}
 	return definition.Value, true
+}
+
+// SplitSemantic separates a query's filters from its free text. The text is
+// what a semantic search embeds, so `type:web rust` embeds "rust" and not the
+// filter. The filters, joined back into query syntax, decide which documents
+// the semantic search may return.
+//
+// A filter is any token isFieldSpecific accepts, negated or not, and an
+// alternation made only of such tokens. A negated plain word is not a filter:
+// it stays in the text, as it did before filters reached semantic search.
+func SplitSemantic(s string) (text, filters string) {
+	tokens, err := Tokenize(s)
+	if err != nil {
+		return s, ""
+	}
+	runes := []rune(s)
+	var textParts, filterParts []string
+	for _, t := range tokens {
+		if isFilterToken(t) {
+			filterParts = append(filterParts, string(runes[t.start:t.end]))
+		} else {
+			textParts = append(textParts, string(runes[t.start:t.end]))
+		}
+	}
+	return RemoveStandaloneWildcards(strings.Join(textParts, " ")), strings.Join(filterParts, " ")
+}
+
+func isFilterToken(t Token) bool {
+	if t.Type == TokenAlternation {
+		return len(t.Parts) > 0 && !slices.ContainsFunc(t.Parts, func(p Token) bool { return !isFieldSpecific(p) })
+	}
+	return isFieldSpecific(t)
 }

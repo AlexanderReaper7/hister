@@ -186,7 +186,11 @@ func (d *Document) ProcessWithSensitivePatternContext(ctx context.Context, ld La
 	if d.Added == 0 {
 		d.Added = now
 	}
-	d.Updated = now
+	// A client that knows when the page was last seen sends it, such as an
+	// import from browser history. A capture leaves it unset.
+	if d.Updated == 0 {
+		d.Updated = now
+	}
 	d.Type = Web
 	if d.HTML != "" {
 		if err := extractFn(ctx, d); err != nil {

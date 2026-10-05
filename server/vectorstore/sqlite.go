@@ -5,6 +5,7 @@ package vectorstore
 import (
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -257,13 +258,22 @@ func (s *sqliteVectorStore) Delete(docID string) error {
 	return tx.Commit()
 }
 
-func (s *sqliteVectorStore) Search(vector []float32, topK int, threshold float64, userID uint) (_ []Result, err error) {
+func (s *sqliteVectorStore) Search(vector []float32, topK int, threshold float64, userID uint, allowed []string) (_ []Result, err error) {
+	if allowed != nil && len(allowed) == 0 {
+		return nil, nil
+	}
+	var allowedJSON []byte
+	if allowed != nil {
+		if allowedJSON, err = json.Marshal(allowed); err != nil {
+			return nil, fmt.Errorf("encode allowed documents: %w", err)
+		}
+	}
 	candidateLimit := searchCandidateLimit(topK)
-	userResults, err := s.searchUser(vector, candidateLimit, threshold, userID)
+	userResults, err := s.searchUser(vector, candidateLimit, threshold, userID, allowedJSON)
 	if err != nil || userID == 0 {
 		return diversifySearchResults(userResults, topK, maxChunksPerDocument), err
 	}
-	globalResults, err := s.searchUser(vector, candidateLimit, threshold, 0)
+	globalResults, err := s.searchUser(vector, candidateLimit, threshold, 0, allowedJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -271,18 +281,28 @@ func (s *sqliteVectorStore) Search(vector []float32, topK int, threshold float64
 	return diversifySearchResults(merged, topK, maxChunksPerDocument), nil
 }
 
-func (s *sqliteVectorStore) searchUser(vector []float32, topK int, threshold float64, userID uint) (_ []Result, err error) {
+// searchUser runs one KNN query. allowedJSON, when not nil, is a JSON array of
+// document IDs. vec0 applies a constraint on its primary key inside the KNN
+// scan, so the k nearest are taken from the allowed chunks only. Measured on
+// 105,232 chunks: 305 ms unfiltered, 539 ms with all 83,461 documents allowed,
+// 122 ms with 1,000 (docs/hister-fork.md in Semantic-Search).
+func (s *sqliteVectorStore) searchUser(vector []float32, topK int, threshold float64, userID uint, allowedJSON []byte) (_ []Result, err error) {
 	blob := float32ToBlob(vector)
-	rows, err := s.db.Query(
-		`SELECT e.chunk_key, e.distance, COALESCE(m.doc_id, ''), COALESCE(m.chunk_idx, 0), COALESCE(m.chunk_text, '')
+	query := `SELECT e.chunk_key, e.distance, COALESCE(m.doc_id, ''), COALESCE(m.chunk_idx, 0), COALESCE(m.chunk_text, '')
 		 FROM embeddings e
 		 LEFT JOIN chunk_meta m ON e.chunk_key = m.chunk_key
 		 WHERE e.embedding MATCH ?
 		   AND e.k = ?
-		   AND e.user_id = ?
-		 ORDER BY e.distance`,
-		blob, topK, userID,
-	)
+		   AND e.user_id = ?`
+	args := []any{blob, topK, userID}
+	if allowedJSON != nil {
+		query += `
+		   AND e.chunk_key IN (SELECT a.chunk_key FROM chunk_meta a WHERE a.doc_id IN (SELECT value FROM json_each(?)))`
+		args = append(args, string(allowedJSON))
+	}
+	query += `
+		 ORDER BY e.distance`
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("vector search for user %d: %w", userID, err)
 	}

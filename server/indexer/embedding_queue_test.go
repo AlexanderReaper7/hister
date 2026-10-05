@@ -179,7 +179,7 @@ func TestReindexRebuildsEmbeddingsAfterDimensionChange(t *testing.T) {
 	if err := idx.Reindex(&config.Rules{}, false, false, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	results, err := idx.vectorStore.Search([]float32{0.25, 0.75}, 5, 0.9, 0)
+	results, err := idx.vectorStore.Search([]float32{0.25, 0.75}, 5, 0.9, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,10 +3,15 @@
 package vectorstore
 
 import (
+	"errors"
 	"sort"
 
 	"github.com/asciimoo/hister/config"
 )
+
+// ErrFilterUnsupported is returned by a backend that cannot restrict a search
+// to a set of documents.
+var ErrFilterUnsupported = errors.New("this vector store backend does not support filtered semantic search")
 
 const (
 	searchCandidateMultiplier = 4
@@ -122,7 +127,12 @@ type VectorStore interface {
 	// Search returns candidates for up to topK documents whose chunk embeddings
 	// are closest to the query vector, with similarity >= threshold, scoped to
 	// the given userID. A backend may return more than one chunk per document.
-	Search(vector []float32, topK int, threshold float64, userID uint) ([]Result, error)
+	//
+	// A non-nil allowed restricts the search to those document IDs before
+	// ranking, so the topK are the best of the allowed documents and not the
+	// allowed part of the overall best. An empty non-nil allowed matches
+	// nothing. A backend that cannot filter returns ErrFilterUnsupported.
+	Search(vector []float32, topK int, threshold float64, userID uint, allowed []string) ([]Result, error)
 
 	// Clear removes all embeddings. Used during reindex to rebuild from scratch.
 	Clear() error

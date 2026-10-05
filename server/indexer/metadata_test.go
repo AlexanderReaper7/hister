@@ -26,7 +26,7 @@ func (*metadataVectorStore) PutChunks(string, uint, []vectorstore.Chunk) error {
 
 func (*metadataVectorStore) Delete(string) error { return nil }
 
-func (*metadataVectorStore) Search([]float32, int, float64, uint) ([]vectorstore.Result, error) {
+func (*metadataVectorStore) Search([]float32, int, float64, uint, []string) ([]vectorstore.Result, error) {
 	return nil, nil
 }
 
