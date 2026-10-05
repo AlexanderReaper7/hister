@@ -55,7 +55,7 @@ func (q *presenceQuery) Searcher(ctx context.Context, reader index.IndexReader, 
 			}
 			present := false
 			doc.VisitFields(func(field index.Field) {
-				if present || (field.Name() != q.Field && !(metadata && strings.HasPrefix(field.Name(), q.Field+"."))) {
+				if present || (field.Name() != q.Field && (!metadata || !strings.HasPrefix(field.Name(), q.Field+"."))) {
 					return
 				}
 				if text, ok := field.(index.TextField); ok {

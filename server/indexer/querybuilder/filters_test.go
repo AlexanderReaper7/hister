@@ -19,7 +19,11 @@ func TestConvenienceFiltersCannotBeSatisfiedByQueryText(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer idx.Close()
+			t.Cleanup(func() {
+				if err := idx.Close(); err != nil {
+					t.Errorf("Close index: %v", err)
+				}
+			})
 			for id, doc := range map[string]map[string]string{
 				"selected": {"title": "needle", "domain": "example.com", "label": "research"},
 				"literal":  {"title": input, "domain": "other.test", "label": ""},
