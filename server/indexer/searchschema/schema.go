@@ -129,6 +129,11 @@ var valueSets = map[string][]ValueDefinition{
 			Min:     new(float64(document.RemoteFile)),
 			Max:     new(float64(document.RemoteFile) + 1),
 		},
+		{
+			Value: document.Code.String(),
+			Min:   new(float64(document.Code)),
+			Max:   new(float64(document.Code) + 1),
+		},
 	},
 	"visit_counts": {
 		{Value: "1", Label: "1 visit", Min: new(float64(1)), Max: new(float64(2))},
@@ -151,7 +156,7 @@ var fields = []FieldDefinition{
 	{Name: "url", Label: "URL", Description: "Search only page addresses", Kind: FieldKindKeyword, IndexField: "url", Weight: 4, Visible: true, NormalizeFilePath: true, DefaultWildcard: true},
 	{Name: "url_re", Label: "URL regexp", Description: "Search page addresses with a Go regular expression", Kind: FieldKindRegexp, IndexField: "url", Weight: 4, Visible: true},
 	{Name: "text", Label: "Text", Description: "Search only document content", Kind: FieldKindText, IndexField: "text", Weight: 1, Visible: true, Phrase: true, DefaultSearch: true},
-	{Name: "type", Label: "Type", Description: "Filter web, local, or remote file documents", Kind: FieldKindEnum, ValueSet: "document_types", IndexField: "type", Visible: true},
+	{Name: "type", Label: "Type", Description: "Filter web, local, remote file, or code documents", Kind: FieldKindEnum, ValueSet: "document_types", IndexField: "type", Visible: true},
 	{Name: "language", Label: "Language", Description: "Filter by document language", Kind: FieldKindText, IndexField: "language", Weight: 1, Visible: true},
 	{Name: "label", Label: "Label", Description: "Search assigned labels", Kind: FieldKindText, IndexField: "label", Weight: 1, Visible: true},
 	{Name: "visits", Label: "Visits", Description: "Filter by visit count", Kind: FieldKindNumericRange, ValueSet: "visit_counts", IndexField: "add_count", Aliases: []string{"add_count"}, Visible: true},

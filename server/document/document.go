@@ -170,6 +170,9 @@ func (d *Document) ProcessWithSensitivePatternContext(ctx context.Context, ld La
 	if d.Type == RemoteFile {
 		return d.processRemoteFile(pu, ld, sensitivePattern)
 	}
+	if d.Type == Code {
+		return d.processCode(pu, ld)
+	}
 	if pu.Scheme == "file" && (d.HTML == "" || d.trustedLocalFile) {
 		return d.processFile(ld, sensitivePattern)
 	}
@@ -196,6 +199,25 @@ func (d *Document) ProcessWithSensitivePatternContext(ctx context.Context, ld La
 		if err := extractFn(ctx, d); err != nil {
 			return err
 		}
+	}
+	d.finalizeDocument(ld)
+	return nil
+}
+
+// processCode keeps what the code indexer sent: the type, the text it chunked,
+// and the commit or modification times it read. The URL only needs a scheme,
+// since it is an editor link such as vscode://file/<path>:<line>:1.
+func (d *Document) processCode(pu *url.URL, ld LanguageDetector) error {
+	if pu.Scheme == "" {
+		return errors.New("invalid code URL: missing scheme")
+	}
+	d.Domain = pu.Hostname()
+	now := time.Now().Unix()
+	if d.Added == 0 {
+		d.Added = now
+	}
+	if d.Updated == 0 {
+		d.Updated = now
 	}
 	d.finalizeDocument(ld)
 	return nil

@@ -246,7 +246,11 @@ type Results struct {
 	PageKey         string               `json:"page_key"`
 	SemanticHits    []SemanticHit        `json:"semantic_hits,omitempty"`
 	SemanticEnabled bool                 `json:"semantic_enabled"`
-	Facets          *FacetsResult        `json:"facets,omitempty"`
+	// SemanticError says why a semantic search that was attempted returned
+	// nothing, such as a query embedding past its deadline, so a client can
+	// tell a failure from "nothing similar" and fall back to the keyword hits.
+	SemanticError string        `json:"semantic_error,omitempty"`
+	Facets        *FacetsResult `json:"facets,omitempty"`
 }
 
 type documentWritePlan struct {
@@ -1049,7 +1053,10 @@ func documentEmbeddingContext(d *document.Document) vectorstore.DocumentContext 
 			keywords = append(keywords, value)
 		}
 	}
+	dateName, date := embeddingDate(d)
 	return vectorstore.DocumentContext{
+		DateName:    dateName,
+		Date:        date,
 		Title:       d.Title,
 		URL:         d.URL,
 		Type:        documentType,
@@ -1058,6 +1065,25 @@ func documentEmbeddingContext(d *document.Document) vectorstore.DocumentContext 
 		Description: documentMetadataString(d, "description"),
 		Keywords:    strings.Join(keywords, ", "),
 	}
+}
+
+// embeddingDate picks the date a document embeds. A web page embeds its first
+// visit, which never changes, because a revisit changes updated without
+// changing the text, and only a text change re-embeds. Code and files embed
+// their modification time, which changes along with their text. Weekday and
+// month are words, so a query that names them has something to match.
+func embeddingDate(d *document.Document) (name, date string) {
+	const layout = "Monday 2 January 2006, 15:04"
+	if d.Type == document.Web {
+		if d.Added == 0 {
+			return "", ""
+		}
+		return "first visited", time.Unix(d.Added, 0).Format(layout)
+	}
+	if d.Updated == 0 {
+		return "", ""
+	}
+	return "modified", time.Unix(d.Updated, 0).Format(layout)
 }
 
 // embedDocumentChunks creates metadata and body chunk embeddings and stores the
@@ -2004,6 +2030,7 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 		vec, err := i.embedder.EmbedQuery(context.Background(), semanticText)
 		if err != nil {
 			log.Warn().Err(err).Msg("semantic query embedding failed")
+			r.SemanticError = "query embedding failed: " + err.Error()
 		} else {
 			threshold := q.SemanticThreshold
 			if threshold <= 0 {
@@ -2013,6 +2040,7 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 			vsResults, err := i.vectorStore.Search(vec, resultLimit, threshold, q.UserID, allowed)
 			if err != nil {
 				log.Warn().Err(err).Msg("vector store search failed")
+				r.SemanticError = "vector search failed: " + err.Error()
 			} else {
 				// Build a set of URLs already in keyword results to avoid duplicating docs.
 				keywordURLs := make(map[string]struct{}, len(matches))

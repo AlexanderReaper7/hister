@@ -40,6 +40,11 @@ type Embedder struct {
 // embeddings. Description and keywords are embedded only in the dedicated
 // metadata vector, not repeated in every body chunk.
 type DocumentContext struct {
+	// DateName and Date are one line of embedded text, such as
+	// "modified: Tuesday 22 September 2026, 14:03", so a query that names a
+	// time has words to match. Empty Date leaves the line out.
+	DateName    string
+	Date        string
 	Title       string
 	URL         string
 	Type        string
@@ -451,6 +456,7 @@ func formatEmbeddingFields(fields []embeddingField, tokenBudget int) string {
 func fullDocumentFields(d DocumentContext) []embeddingField {
 	return []embeddingField{
 		{name: "title", value: d.Title},
+		{name: d.DateName, value: d.Date},
 		{name: "type", value: d.Type},
 		{name: "language", value: d.Language},
 		{name: "author", value: d.Author},
@@ -463,6 +469,7 @@ func fullDocumentFields(d DocumentContext) []embeddingField {
 func bodyDocumentFields(d DocumentContext) []embeddingField {
 	return []embeddingField{
 		{name: "title", value: d.Title},
+		{name: d.DateName, value: d.Date},
 		{name: "language", value: d.Language},
 	}
 }
