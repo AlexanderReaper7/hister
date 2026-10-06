@@ -52,6 +52,12 @@ type DocumentContext struct {
 	Author      string
 	Description string
 	Keywords    string
+	// BodyOnly leaves out the metadata vector. For a code piece it held only
+	// the piece's path, line and date, and matched file names instead of code:
+	// 19 of 30 hits in one search, and the Semantic-Search benchmark's MRR rose
+	// from 0.509 to 0.559 without them (2026-10-06). The body chunks still
+	// carry the title.
+	BodyOnly bool
 }
 
 type embeddingField struct {
@@ -479,7 +485,7 @@ func (e *Embedder) documentEmbeddingInputsWithLimit(text string, d DocumentConte
 	metadataLabel := e.documentPrefix + "document:\n"
 	metadataBudget := contextLength - len(tokenize(metadataLabel))
 	metadata := formatEmbeddingFields(fullDocumentFields(d), metadataBudget)
-	if metadata != "" {
+	if metadata != "" && !d.BodyOnly {
 		inputs = append(inputs, documentEmbeddingInput{
 			embeddingText: metadataLabel + metadata,
 			chunkText:     metadata,

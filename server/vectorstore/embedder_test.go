@@ -209,6 +209,17 @@ func TestDocumentEmbeddingInputsSupportMetadataOnlyDocument(t *testing.T) {
 	}
 }
 
+func TestDocumentEmbeddingInputsBodyOnly(t *testing.T) {
+	embedder := newTestEmbedder("")
+	inputs := embedder.documentEmbeddingInputs("fn main() {}", DocumentContext{Title: "repo/src/main.rs:1", BodyOnly: true})
+	if len(inputs) != 1 {
+		t.Fatalf("expected only the body input, got %d: %#v", len(inputs), inputs)
+	}
+	if !strings.Contains(inputs[0].embeddingText, "title: repo/src/main.rs:1") || inputs[0].chunkText != "fn main() {}" {
+		t.Errorf("body input = %#v", inputs[0])
+	}
+}
+
 func TestDocumentEmbeddingInputsEmptyDocument(t *testing.T) {
 	embedder := newTestEmbedder("")
 	if inputs := embedder.documentEmbeddingInputs("", DocumentContext{}); inputs != nil {

@@ -26,6 +26,17 @@ func TestCodeDocumentKeepsTypeAndTimes(t *testing.T) {
 	}
 }
 
+func TestOnlyCodeIsEmbeddedBodyOnly(t *testing.T) {
+	for _, d := range []*document.Document{
+		{URL: "vscode://file/src/main.rs:10:1", Title: "repo/src/main.rs:10", Text: "fn main() {}", Type: document.Code},
+		{URL: "https://example.com/main", Title: "Main", Text: "fn main() {}"},
+	} {
+		if got, want := documentEmbeddingContext(d).BodyOnly, d.Type == document.Code; got != want {
+			t.Errorf("%s: BodyOnly = %v, want %v", d.URL, got, want)
+		}
+	}
+}
+
 func TestTypeFilterSeparatesCodeFromWeb(t *testing.T) {
 	idx := newTestIndexer(t, testutil.Config(t))
 	defer idx.Close()

@@ -1071,6 +1071,7 @@ func documentEmbeddingContext(d *document.Document) vectorstore.DocumentContext 
 		Author:      documentMetadataString(d, "author"),
 		Description: documentMetadataString(d, "description"),
 		Keywords:    strings.Join(keywords, ", "),
+		BodyOnly:    d.Type == document.Code,
 	}
 }
 
