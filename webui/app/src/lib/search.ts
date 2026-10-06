@@ -42,6 +42,12 @@ export interface SemanticHit {
   document?: SearchResult;
 }
 
+export interface RerankedHit {
+  doc_id: string;
+  url: string;
+  rerank_score: number;
+}
+
 export interface TermCount {
   term: string;
   count: number;
@@ -72,6 +78,10 @@ export interface SearchResults {
   query_suggestion?: string;
   semantic_hits?: SemanticHit[];
   semantic_enabled?: boolean;
+  semantic_error?: string;
+  // The first page's best keyword and semantic hits in the reranker's order.
+  reranked?: RerankedHit[];
+  rerank_error?: string;
   page_key?: string;
   facets?: FacetsResult;
 }

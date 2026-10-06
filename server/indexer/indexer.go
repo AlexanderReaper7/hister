@@ -249,8 +249,15 @@ type Results struct {
 	// SemanticError says why a semantic search that was attempted returned
 	// nothing, such as a query embedding past its deadline, so a client can
 	// tell a failure from "nothing similar" and fall back to the keyword hits.
-	SemanticError string        `json:"semantic_error,omitempty"`
-	Facets        *FacetsResult `json:"facets,omitempty"`
+	SemanticError string `json:"semantic_error,omitempty"`
+	// Reranked is the first page in the reranker's order: the best keyword
+	// and semantic hits together, each named by doc_id and url, which is how
+	// clients find it in Documents or SemanticHits. Empty when reranking is
+	// off, did not apply (another sort, a later page) or failed.
+	Reranked []RerankedHit `json:"reranked,omitempty"`
+	// RerankError says why a rerank that was attempted did not happen.
+	RerankError string        `json:"rerank_error,omitempty"`
+	Facets      *FacetsResult `json:"facets,omitempty"`
 }
 
 type documentWritePlan struct {
@@ -1966,6 +1973,7 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 	sortDefinition := searchschema.Sort(q.Sort)
 	sortByScore := sortDefinition.ByScore
 	req.SortBy(sortDefinition.Fields)
+	firstPage := q.PageKey == ""
 
 	if q.PageKey != "" {
 		var after []string
@@ -2020,6 +2028,7 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 
 	// Run semantic search if enabled and the embedding infrastructure is available.
 	semanticText, semanticFilters := querybuilder.SplitSemantic(expression.Text)
+	var semanticCandidates []rerankCandidate
 	if q.SemanticEnabled && i.embedder != nil && i.vectorStore != nil &&
 		strings.TrimSpace(semanticText) != "" {
 		r.SemanticEnabled = true
@@ -2052,22 +2061,27 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 				type docHit struct {
 					similarity float64
 					chunkText  string
+					// The best body chunk, which the reranker reads. Chunk
+					// 0 is the metadata chunk: title, date and URL.
+					bodyText string
+					bodySim  float64
 				}
 				bestByDoc := make(map[string]*docHit)
 				// Preserve insertion order for stable output.
 				var docOrder []string
 				for _, vr := range vsResults {
-					if existing, ok := bestByDoc[vr.DocID]; ok {
-						if vr.Similarity > existing.similarity {
-							existing.similarity = vr.Similarity
-							existing.chunkText = vr.ChunkText
-						}
-					} else {
-						bestByDoc[vr.DocID] = &docHit{
-							similarity: vr.Similarity,
-							chunkText:  vr.ChunkText,
-						}
+					existing, ok := bestByDoc[vr.DocID]
+					if !ok {
+						existing = &docHit{similarity: vr.Similarity, chunkText: vr.ChunkText}
+						bestByDoc[vr.DocID] = existing
 						docOrder = append(docOrder, vr.DocID)
+					} else if vr.Similarity > existing.similarity {
+						existing.similarity = vr.Similarity
+						existing.chunkText = vr.ChunkText
+					}
+					if vr.ChunkIdx > 0 && (existing.bodyText == "" || vr.Similarity > existing.bodySim) {
+						existing.bodyText = vr.ChunkText
+						existing.bodySim = vr.Similarity
 					}
 				}
 				for _, docID := range docOrder {
@@ -2080,6 +2094,11 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 					// For semantic-only hits, populate the document with a truncated text preview.
 					d := i.getByDocID(docID, resultIncludeText|resultIncludeHTML)
 					if d != nil {
+						passage := dh.bodyText
+						if passage == "" {
+							passage = d.Text
+						}
+						semanticCandidates = append(semanticCandidates, rerankCandidate{docID: docID, url: d.URL, title: d.Title, text: passage})
 						if _, inKeyword := keywordURLs[d.URL]; !inKeyword {
 							d.Text = truncateText(d.Text, semanticTextPreviewLen)
 							hit.Document = d
@@ -2089,6 +2108,10 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 				}
 			}
 		}
+	}
+
+	if rc := semanticConfig.Rerank; rc.Enable && firstPage && sortDefinition.Value == "relevance" && strings.TrimSpace(semanticText) != "" {
+		i.rerank(r, rc, semanticText, keywordRerankCandidates(res.Hits), semanticCandidates)
 	}
 
 	// Bump the total to reflect semantic matches that are not in the

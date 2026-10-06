@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import type { SearchResult, SearchResults, SemanticHit } from './search';
+import type { RerankedHit, SearchResult, SearchResults, SemanticHit } from './search';
 
 export interface MergedResult extends SearchResult {
   semanticScore?: number;
+  // Set for a hit the reranker scored. Those come first under relevance.
+  rerankScore?: number;
   finalScore: number;
   sourceType: 'keyword' | 'semantic' | 'both';
 }
@@ -13,6 +15,7 @@ interface MergeOptions {
   weight: number;
   sort: string;
   userId?: number;
+  reranked?: RerankedHit[];
 }
 
 function compareStrings(a: string, b: string): number {
@@ -36,7 +39,13 @@ function compareResults(a: MergedResult, b: MergedResult, sort: string): number 
       difference = compareStrings(a.domain, b.domain);
       break;
     default:
-      difference = b.finalScore - a.finalScore || dateDifference;
+      if (a.rerankScore !== undefined || b.rerankScore !== undefined) {
+        // At least one is set, so this is never NaN.
+        difference = (b.rerankScore ?? -Infinity) - (a.rerankScore ?? -Infinity);
+        difference ||= b.finalScore - a.finalScore || dateDifference;
+      } else {
+        difference = b.finalScore - a.finalScore || dateDifference;
+      }
   }
   return direction * difference || compareStrings(a.id ?? a.url, b.id ?? b.url);
 }
@@ -44,10 +53,18 @@ function compareResults(a: MergedResult, b: MergedResult, sort: string): number 
 export function mergeSearchResults(
   docs: SearchResult[],
   hits: SemanticHit[] | undefined,
-  { semanticEnabled, weight, sort, userId }: MergeOptions,
+  { semanticEnabled, weight, sort, userId, reranked }: MergeOptions,
 ): MergedResult[] {
+  const rerankScores = new Map((reranked ?? []).map((hit) => [hit.url, hit.rerank_score]));
   if (!semanticEnabled || !hits?.length) {
-    return docs.map((doc) => ({ ...doc, finalScore: doc.score ?? 0, sourceType: 'keyword' }));
+    const keyword = docs.map((doc): MergedResult => ({
+      ...doc,
+      rerankScore: rerankScores.get(doc.url),
+      finalScore: doc.score ?? 0,
+      sourceType: 'keyword',
+    }));
+    // Without a rerank the server's order stands.
+    return rerankScores.size ? keyword.sort((a, b) => compareResults(a, b, sort)) : keyword;
   }
 
   const maxScore = Math.max(...docs.map((doc) => doc.score ?? 0), 1);
@@ -61,6 +78,7 @@ export function mergeSearchResults(
     merged.set(doc.url, {
       ...doc,
       semanticScore,
+      rerankScore: rerankScores.get(doc.url),
       finalScore: (1 - weight) * ((doc.score ?? 0) / maxScore) + weight * (semanticScore ?? 0),
       sourceType: semanticScore === undefined ? 'keyword' : 'both',
     });
@@ -72,6 +90,7 @@ export function mergeSearchResults(
       ...hit.document,
       id: hit.document.id || hit.doc_id,
       semanticScore: hit.similarity,
+      rerankScore: rerankScores.get(hit.document.url),
       finalScore: weight * hit.similarity,
       sourceType: 'semantic',
     });

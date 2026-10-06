@@ -472,6 +472,7 @@
       weight: semanticWeight,
       sort: currentSort,
       userId: getUserId(),
+      reranked: lastResults?.reranked,
     }),
   );
 

@@ -207,6 +207,31 @@ type SemanticSearch struct {
 	MaxEmbeddingConcurrency      int               `yaml:"max_embedding_concurrency" mapstructure:"max_embedding_concurrency"`
 	QueryEmbeddingTimeout        int               `yaml:"query_embedding_timeout" mapstructure:"query_embedding_timeout"`
 	MaxQueryEmbeddingConcurrency int               `yaml:"max_query_embedding_concurrency" mapstructure:"max_query_embedding_concurrency"`
+	Rerank                       Rerank            `yaml:"rerank" mapstructure:"rerank"`
+}
+
+// Rerank orders the first page of a search with a reranker behind a
+// /v1/rerank endpoint (llama-server's API, also Jina's and Cohere's). The top
+// keyword and semantic hits go to it together, and its scores become one
+// order, returned as Results.Reranked. On any failure the search returns
+// without it and says why in Results.RerankError.
+type Rerank struct {
+	Enable   bool              `yaml:"enable" mapstructure:"enable"`
+	Endpoint string            `yaml:"endpoint" mapstructure:"endpoint"`
+	Model    string            `yaml:"model" mapstructure:"model"`
+	APIKey   string            `yaml:"api_key" mapstructure:"api_key"`
+	Headers  map[string]string `yaml:"headers" mapstructure:"headers"`
+	// Candidates is how many hits are reranked in total. KeywordCandidates
+	// of them are the best keyword hits, the rest the best semantic hits.
+	// A document in both counts once, and the other list fills its place.
+	Candidates        int `yaml:"candidates" mapstructure:"candidates"`
+	KeywordCandidates int `yaml:"keyword_candidates" mapstructure:"keyword_candidates"`
+	// MaxDocumentChars cuts each candidate's text, which bounds the request
+	// and the reranker's memory.
+	MaxDocumentChars int `yaml:"max_document_chars" mapstructure:"max_document_chars"`
+	// Timeout in seconds. It includes the reranker loading, when the
+	// endpoint loads models on demand.
+	Timeout int `yaml:"timeout" mapstructure:"timeout"`
 }
 
 // EmbeddingFingerprint identifies configuration that changes stored document
@@ -625,6 +650,14 @@ func CreateDefaultConfig() *Config {
 			MaxEmbeddingConcurrency:      2,
 			QueryEmbeddingTimeout:        2,
 			MaxQueryEmbeddingConcurrency: 1,
+			Rerank: Rerank{
+				Enable:            false,
+				Headers:           map[string]string{},
+				Candidates:        30,
+				KeywordCandidates: 10,
+				MaxDocumentChars:  2000,
+				Timeout:           15,
+			},
 		},
 	}
 }
@@ -1251,6 +1284,28 @@ func (s SemanticSearch) Validate() error {
 	}
 	if s.MaxContextLength <= 0 {
 		return fmt.Errorf("semantic_search.max_context_length must be a positive integer, got %d", s.MaxContextLength)
+	}
+	return s.Rerank.Validate()
+}
+
+func (r Rerank) Validate() error {
+	if !r.Enable {
+		return nil
+	}
+	if r.Endpoint == "" {
+		return errors.New("semantic_search.rerank.endpoint must not be empty when reranking is enabled")
+	}
+	if r.Candidates <= 0 {
+		return fmt.Errorf("semantic_search.rerank.candidates must be a positive integer, got %d", r.Candidates)
+	}
+	if r.KeywordCandidates < 0 || r.KeywordCandidates > r.Candidates {
+		return fmt.Errorf("semantic_search.rerank.keyword_candidates must be between 0 and candidates (%d), got %d", r.Candidates, r.KeywordCandidates)
+	}
+	if r.MaxDocumentChars <= 0 {
+		return fmt.Errorf("semantic_search.rerank.max_document_chars must be a positive integer, got %d", r.MaxDocumentChars)
+	}
+	if r.Timeout <= 0 {
+		return fmt.Errorf("semantic_search.rerank.timeout must be a positive integer, got %d", r.Timeout)
 	}
 	return nil
 }
