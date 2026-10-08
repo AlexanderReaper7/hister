@@ -285,7 +285,7 @@ func (s *sqliteVectorStore) Search(vector []float32, topK int, threshold float64
 // document IDs. vec0 applies a constraint on its primary key inside the KNN
 // scan, so the k nearest are taken from the allowed chunks only. Measured on
 // 105,232 chunks: 305 ms unfiltered, 539 ms with all 83,461 documents allowed,
-// 122 ms with 1,000 (docs/hister-fork.md in Semantic-Search).
+// 122 ms with 1,000 (docs/hister-fork.md in SemSearch).
 func (s *sqliteVectorStore) searchUser(vector []float32, topK int, threshold float64, userID uint, allowedJSON []byte) (_ []Result, err error) {
 	blob := float32ToBlob(vector)
 	query := `SELECT e.chunk_key, e.distance, COALESCE(m.doc_id, ''), COALESCE(m.chunk_idx, 0), COALESCE(m.chunk_text, '')
