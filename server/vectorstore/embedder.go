@@ -23,6 +23,7 @@ type Embedder struct {
 	endpoint         string
 	model            string
 	apiKey           string
+	documentAPIKey   string
 	headers          map[string]string
 	dimensions       int
 	client           *http.Client
@@ -116,10 +117,15 @@ func NewEmbedder(cfg *config.SemanticSearch) *Embedder {
 	if maxBatchSize <= 0 {
 		maxBatchSize = defaultEmbeddingBatchSize
 	}
+	documentAPIKey := cfg.DocumentAPIKey
+	if documentAPIKey == "" {
+		documentAPIKey = cfg.APIKey
+	}
 	return &Embedder{
 		endpoint:         cfg.EmbeddingEndpoint,
 		model:            cfg.EmbeddingModel,
 		apiKey:           cfg.APIKey,
+		documentAPIKey:   documentAPIKey,
 		headers:          cfg.Headers,
 		dimensions:       cfg.Dimensions,
 		maxContextLength: contextLengthWithHeadroom(cfg.MaxContextLength),
@@ -242,7 +248,7 @@ func shouldRetryEmbeddingError(ctx context.Context, err error) bool {
 
 // doEmbeddingRequestOnce sends one embedding request to the endpoint and returns
 // the parsed response. input is either a string (single) or []string (batch).
-func (e *Embedder) doEmbeddingRequestOnce(ctx context.Context, input any) (_ *embeddingResponse, err error) {
+func (e *Embedder) doEmbeddingRequestOnce(ctx context.Context, apiKey string, input any) (_ *embeddingResponse, err error) {
 	body, err := json.Marshal(embeddingRequest{
 		Model:      e.model,
 		Input:      input,
@@ -257,8 +263,8 @@ func (e *Embedder) doEmbeddingRequestOnce(ctx context.Context, input any) (_ *em
 		return nil, fmt.Errorf("create embedding request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if e.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	for k, v := range e.headers {
 		req.Header.Set(k, v)
@@ -288,8 +294,9 @@ func (e *Embedder) doEmbeddingRequestOnce(ctx context.Context, input any) (_ *em
 
 // doEmbeddingRequest sends an embedding request, retrying transient endpoint or
 // network failures while respecting the caller's context. sem bounds how many
-// requests of the same kind run at once; nil means unlimited.
-func (e *Embedder) doEmbeddingRequest(ctx context.Context, sem chan struct{}, input any) (*embeddingResponse, error) {
+// requests of the same kind run at once; nil means unlimited. apiKey is the
+// kind's: the query key or the document key.
+func (e *Embedder) doEmbeddingRequest(ctx context.Context, sem chan struct{}, apiKey string, input any) (*embeddingResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -306,7 +313,7 @@ func (e *Embedder) doEmbeddingRequest(ctx context.Context, sem chan struct{}, in
 	var err error
 	for attempt := range embeddingMaxAttempts {
 		var result *embeddingResponse
-		result, err = e.doEmbeddingRequestOnce(ctx, input)
+		result, err = e.doEmbeddingRequestOnce(ctx, apiKey, input)
 		if err == nil {
 			return result, nil
 		}
@@ -327,11 +334,11 @@ func (e *Embedder) doEmbeddingRequest(ctx context.Context, sem chan struct{}, in
 
 // Embed converts a single text into a float32 vector.
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	return e.embed(ctx, e.sem, text)
+	return e.embed(ctx, e.sem, e.documentAPIKey, text)
 }
 
-func (e *Embedder) embed(ctx context.Context, sem chan struct{}, text string) ([]float32, error) {
-	result, err := e.doEmbeddingRequest(ctx, sem, text)
+func (e *Embedder) embed(ctx context.Context, sem chan struct{}, apiKey, text string) ([]float32, error) {
+	result, err := e.doEmbeddingRequest(ctx, sem, apiKey, text)
 	if err != nil {
 		return nil, err
 	}
@@ -358,7 +365,7 @@ func (e *Embedder) EmbedQuery(ctx context.Context, text string) ([]float32, erro
 	}
 	ctx, cancel := context.WithTimeout(ctx, e.queryTimeout)
 	defer cancel()
-	return e.embed(ctx, e.querySem, e.queryPrefix+text)
+	return e.embed(ctx, e.querySem, e.apiKey, e.queryPrefix+text)
 }
 
 func embeddingVectors(result *embeddingResponse, dimensions int) ([][]float32, error) {
@@ -375,7 +382,7 @@ func embeddingVectors(result *embeddingResponse, dimensions int) ([][]float32, e
 // embedBatch converts one bounded batch, splitting it further when an endpoint
 // applies a context limit to the complete request.
 func (e *Embedder) embedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	result, err := e.doEmbeddingRequest(ctx, e.sem, texts)
+	result, err := e.doEmbeddingRequest(ctx, e.sem, e.documentAPIKey, texts)
 	if err != nil {
 		if _, _, contextError := embeddingContextErrorDetails(err); contextError && len(texts) > 1 {
 			middle := len(texts) / 2

@@ -194,6 +194,7 @@ type SemanticSearch struct {
 	EmbeddingModel               string            `yaml:"embedding_model" mapstructure:"embedding_model"`
 	EmbeddingTimeout             int               `yaml:"embedding_timeout" mapstructure:"embedding_timeout"`
 	APIKey                       string            `yaml:"api_key" mapstructure:"api_key"`
+	DocumentAPIKey               string            `yaml:"document_api_key" mapstructure:"document_api_key"` // indexing's key, so an endpoint can rank bulk work below queries; empty means APIKey
 	Headers                      map[string]string `yaml:"headers" mapstructure:"headers"`
 	Dimensions                   int               `yaml:"dimensions" mapstructure:"dimensions"`
 	MaxContextLength             int               `yaml:"max_context_length" mapstructure:"max_context_length"`
@@ -637,6 +638,7 @@ func CreateDefaultConfig() *Config {
 			EmbeddingModel:               "qwen3-embedding:8b",
 			EmbeddingTimeout:             300,
 			APIKey:                       "",
+			DocumentAPIKey:               "",
 			Headers:                      map[string]string{},
 			Dimensions:                   postgresHNSWMaxDimensions,
 			MaxContextLength:             512,

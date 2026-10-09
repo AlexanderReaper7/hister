@@ -679,3 +679,51 @@ func TestEmbedQueryDeadlineCancelsRetry(t *testing.T) {
 		t.Fatal("query slot leaked")
 	}
 }
+
+func TestDocumentAPIKeySeparatesIndexingFromQueries(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("Authorization"))
+		var req embeddingRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		count := 1
+		if texts, ok := req.Input.([]any); ok {
+			count = len(texts)
+		}
+		writeEmbeddingBatchResponse(w, count)
+	}))
+	defer srv.Close()
+	for _, tc := range []struct {
+		documentKey, wantDocument string
+	}{
+		{"indexing", "Bearer indexing"},
+		{"", "Bearer queries"},
+	} {
+		got = nil
+		e := NewEmbedder(&config.SemanticSearch{
+			EmbeddingEndpoint: srv.URL,
+			EmbeddingModel:    "test-model",
+			Dimensions:        3,
+			MaxContextLength:  128,
+			APIKey:            "queries",
+			DocumentAPIKey:    tc.documentKey,
+		})
+		if _, err := e.EmbedQuery(context.Background(), "q"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.Embed(context.Background(), "d"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.ChunkAndEmbed(context.Background(), "body", DocumentContext{Title: "t"}); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) < 3 || got[0] != "Bearer queries" {
+			t.Fatalf("document key %q: requests %v", tc.documentKey, got)
+		}
+		for _, auth := range got[1:] {
+			if auth != tc.wantDocument {
+				t.Fatalf("document key %q: requests %v, want documents as %q", tc.documentKey, got, tc.wantDocument)
+			}
+		}
+	}
+}

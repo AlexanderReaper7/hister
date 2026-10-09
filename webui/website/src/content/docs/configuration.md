@@ -503,6 +503,12 @@ description: 'Explore every configuration section, option, default value, enviro
       description: 'Optional API key sent as an Authorization bearer token. Hosted providers commonly require it.',
     },
     {
+      name: 'document_api_key',
+      type: 'string',
+      defaultValue: '""',
+      description: 'Optional API key for indexing requests. When set, documents are embedded with this key and only queries use api_key, so an endpoint that ranks clients by key can serve a waiting search before bulk indexing. Empty means api_key is used for both.',
+    },
+    {
       name: 'headers',
       type: 'map[string]string',
       defaultValue: '{}',
@@ -800,6 +806,7 @@ semantic_search:
   max_query_embedding_concurrency: 1
   query_embedding_timeout: 2
   # api_key: 'sk-...'            # required for hosted providers
+  # document_api_key: 'sk-...'   # indexing only; defaults to api_key
   # headers: {}                  # extra HTTP headers for proxies or custom auth
 ```
 

@@ -91,6 +91,7 @@ func TestRedactedConfigHidesCredentialsWithoutMutation(t *testing.T) {
 	c.Crawler.Cookies = []CrawlerCookie{{Name: "session", Value: "cookie-credential"}}
 	c.Crawler.Proxy = "http://proxy-user:proxy-credential@localhost:8080?key=query-credential#fragment-credential"
 	c.SemanticSearch.APIKey = "embedding-credential"
+	c.SemanticSearch.DocumentAPIKey = "document-embedding-credential"
 	c.Extractors = map[string]*Extractor{"ytdlp": {Options: map[string]any{"extra_args": []string{"--password", "argument-credential"}, "nested": map[string]any{"api_key": "nested-credential"}}}}
 	values, err := c.Redacted()
 	if err != nil {
