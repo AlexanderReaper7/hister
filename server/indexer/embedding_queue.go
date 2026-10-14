@@ -20,7 +20,15 @@ const (
 	embeddingRetryMaxDelay     = time.Minute
 	embeddingMaxJobAttempts    = 5
 	defaultEmbeddingWorkers    = 2
+	// A failed job gets a fresh set of attempts this long after its last
+	// failure. The attempts above are spent within seconds, and an embedder
+	// outage lasts minutes to days.
+	embeddingFailedRetryDelay = time.Hour
 )
+
+// embeddingFailedRetryCheck is how often the dispatcher looks for failed jobs
+// due another try. Tests shorten it.
+var embeddingFailedRetryCheck = 5 * time.Minute
 
 type activeEmbedding struct {
 	cancel context.CancelFunc
@@ -53,6 +61,7 @@ func newEmbeddingQueue(idx *Indexer, workers int) (*embeddingQueue, error) {
 	if err := model.ResetInProgressEmbeddingJobs(); err != nil {
 		return nil, err
 	}
+	requeueFailedEmbeddingJobs()
 	ctx, cancel := context.WithCancel(idx.embedCtx)
 	q := &embeddingQueue{
 		idx:    idx,
@@ -129,9 +138,27 @@ func (q *embeddingQueue) waitForWork(delay time.Duration) bool {
 	}
 }
 
+// requeueFailedEmbeddingJobs gives jobs that failed more than
+// embeddingFailedRetryDelay ago another set of attempts.
+func requeueFailedEmbeddingJobs() {
+	n, err := model.RequeueFailedEmbeddingJobs(time.Now().Add(-embeddingFailedRetryDelay))
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to requeue failed embedding jobs")
+		return
+	}
+	if n > 0 {
+		log.Info().Int64("jobs", n).Msg("requeued failed embedding jobs")
+	}
+}
+
 func (q *embeddingQueue) dispatch() {
 	defer close(q.jobs)
+	nextRequeue := time.Now().Add(embeddingFailedRetryCheck)
 	for {
+		if now := time.Now(); !now.Before(nextRequeue) {
+			requeueFailedEmbeddingJobs()
+			nextRequeue = now.Add(embeddingFailedRetryCheck)
+		}
 		job, err := model.ClaimNextEmbeddingJob()
 		if err != nil {
 			log.Error().Err(err).Msg("failed to claim embedding job")

@@ -367,3 +367,113 @@ func TestEmbeddingQueueQuarantinesJobAfterMaximumAttempts(t *testing.T) {
 		t.Fatalf("job attempts = %d, want %d", stored.Attempts, embeddingMaxJobAttempts)
 	}
 }
+
+func failedRetryTestConfig(t *testing.T, endpoint string) *config.Config {
+	t.Helper()
+	cfg := testutil.Config(t)
+	cfg.Server.Database = "hister-test.sqlite3"
+	cfg.SemanticSearch.Enable = true
+	cfg.SemanticSearch.EmbeddingEndpoint = endpoint
+	cfg.SemanticSearch.EmbeddingModel = "test"
+	cfg.SemanticSearch.Dimensions = 2
+	cfg.SemanticSearch.MaxContextLength = 32
+	cfg.SemanticSearch.ChunkOverlap = 4
+	cfg.SemanticSearch.MaxEmbeddingConcurrency = 1
+	return cfg
+}
+
+// storeFailedEmbeddingJob records a job for docID that used up its attempts
+// at failedAt, as one does during an embedder outage.
+func storeFailedEmbeddingJob(t *testing.T, docID string, failedAt time.Time) {
+	t.Helper()
+	failedAt = failedAt.UTC()
+	job := model.EmbeddingJob{
+		DocID:       docID,
+		Status:      model.EmbeddingJobFailed,
+		Attempts:    embeddingMaxJobAttempts,
+		AvailableAt: failedAt,
+		LastError:   "connect: connection refused",
+	}
+	if err := model.DB.Create(&job).Error; err != nil {
+		t.Fatalf("store failed job %s: %v", docID, err)
+	}
+	if err := model.DB.Model(&model.EmbeddingJob{}).Where("doc_id = ?", docID).
+		UpdateColumn("updated_at", failedAt).Error; err != nil {
+		t.Fatalf("date failed job %s: %v", docID, err)
+	}
+}
+
+func addFailedRetryDocuments(t *testing.T, idx *Indexer, requests *atomic.Int64) (oldID, recentID string) {
+	t.Helper()
+	for _, url := range []string{"https://example.com/failed-old", "https://example.com/failed-recent"} {
+		if err := idx.Add(&document.Document{URL: url, Title: "Failed", Text: "text of " + url, Processed: true}); err != nil {
+			t.Fatalf("Add(%s) error: %v", url, err)
+		}
+	}
+	waitForEmbeddingJobs(t, requests, 2)
+	return document.GetDocID(0, "https://example.com/failed-old"), document.GetDocID(0, "https://example.com/failed-recent")
+}
+
+// waitForFailedRetry waits for the old job to be embedded again, then checks
+// that the job that failed a minute ago is still failed.
+func waitForFailedRetry(t *testing.T, requests *atomic.Int64, oldID, recentID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var old int64
+		if err := model.DB.Model(&model.EmbeddingJob{}).Where("doc_id = ?", oldID).Count(&old).Error; err != nil {
+			t.Fatalf("count old job: %v", err)
+		}
+		if old == 0 && requests.Load() == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job that failed 2 h ago was not retried: %d jobs left, %d requests, want 0 and 3", old, requests.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var recent model.EmbeddingJob
+	if err := model.DB.Where("doc_id = ?", recentID).First(&recent).Error; err != nil {
+		t.Fatalf("load recent job: %v", err)
+	}
+	if recent.Status != model.EmbeddingJobFailed || recent.Attempts != embeddingMaxJobAttempts {
+		t.Fatalf("job that failed a minute ago: status %q, attempts %d; want %q and %d",
+			recent.Status, recent.Attempts, model.EmbeddingJobFailed, embeddingMaxJobAttempts)
+	}
+}
+
+func TestEmbeddingQueueRetriesFailedJobsAtStartup(t *testing.T) {
+	var requests atomic.Int64
+	server := embeddingTestServer(t, &requests)
+	defer server.Close()
+	cfg := failedRetryTestConfig(t, server.URL)
+	testutil.InitModelWithConfig(t, cfg)
+
+	idx := newTestIndexer(t, cfg)
+	oldID, recentID := addFailedRetryDocuments(t, idx, &requests)
+	idx.Close()
+	storeFailedEmbeddingJob(t, oldID, time.Now().Add(-2*embeddingFailedRetryDelay))
+	storeFailedEmbeddingJob(t, recentID, time.Now().Add(-time.Minute))
+
+	idx = newTestIndexer(t, cfg)
+	defer idx.Close()
+	waitForFailedRetry(t, &requests, oldID, recentID)
+}
+
+func TestEmbeddingQueueRetriesFailedJobsWhileRunning(t *testing.T) {
+	check := embeddingFailedRetryCheck
+	embeddingFailedRetryCheck = 20 * time.Millisecond
+	t.Cleanup(func() { embeddingFailedRetryCheck = check })
+	var requests atomic.Int64
+	server := embeddingTestServer(t, &requests)
+	defer server.Close()
+	cfg := failedRetryTestConfig(t, server.URL)
+	testutil.InitModelWithConfig(t, cfg)
+
+	idx := newTestIndexer(t, cfg)
+	defer idx.Close()
+	oldID, recentID := addFailedRetryDocuments(t, idx, &requests)
+	storeFailedEmbeddingJob(t, oldID, time.Now().Add(-2*embeddingFailedRetryDelay))
+	storeFailedEmbeddingJob(t, recentID, time.Now().Add(-time.Minute))
+	waitForFailedRetry(t, &requests, oldID, recentID)
+}
